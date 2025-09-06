@@ -1,231 +1,143 @@
 use crate::config::Config;
-use crate::helpers::*;
-use crate::logger::*;
 use crate::notifier;
-use colored::*;
-use std::sync::{Arc, Mutex};
-use std::{fs, thread, time::Duration};
+use log::{error, info, warn};
+use nix::unistd::Uid;
+use signal_hook::{consts::signal::*, iterator::Signals};
+use std::io::{self, Write};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::{thread, time::Duration};
+use sysinfo::System;
 
-pub fn start_daemon_with_config(booster_enabled: Arc<Mutex<bool>>, config: Config) {
-    let mut last_load: f64 = 0.0;
-    let mut idle_cycles: u32 = 0;
-
-    loop {
-        let load = get_load_avg();
-        let enabled = *booster_enabled.lock().unwrap();
-
-        if !enabled {
-            println!("{}", "⏸ Hayaku-Ike paused by user".yellow());
-            log("Hayaku-Ike paused by user");
-            notifier::notify_paused("Booster paused by user");
-            run_boost_cycle(Some(false), &config);
-            idle_cycles = 0;
-        } else if load < config.idle_load_threshold {
-            idle_cycles += 1;
-            println!("{}", "💤 System idle detected, running booster".green());
-            log("System idle detected, running booster");
-
-            if idle_cycles >= config.min_idle_cycles_for_notify
-                || (last_load - load).abs() > config.load_change_threshold
-            {
-                notifier::notify_idle("System idle detected, running booster");
-            }
-
-            run_boost_cycle(Some(true), &config);
-        } else {
-            let msg = format!("⚡ System busy (load {:.2}), skipping booster", load);
-            println!("{}", msg.yellow());
-            log(&msg);
-
-            if (last_load - load).abs() > config.load_change_threshold {
-                notifier::notify_busy(&msg);
-            }
-
-            idle_cycles = 0;
-        }
-
-        last_load = load;
-
-        let interval = if load < config.idle_load_threshold {
-            config.min_interval
-        } else {
-            config.max_interval
-        };
-
-        println!(
-            "{}",
-            format!("⏱ Next check in {}s\n", interval).bold().green()
-        );
-        log(&format!("Next check in {}s", interval));
-        thread::sleep(Duration::from_secs(interval));
+fn is_root() -> bool {
+    if Uid::effective().is_root() {
+        true
+    } else {
+        warn!("Run as root for full functionality.");
+        false
     }
 }
 
-pub fn run_boost_cycle(enabled: Option<bool>, config: &Config) {
-    let enabled = enabled.unwrap_or(true);
+fn apply_performance_boost() -> io::Result<()> {
+    info!("Setting CPU governor to performance...");
+    let cores = System::new().cpus().len();
+    for i in 0..cores {
+        let path = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor", i);
+        let mut file = std::fs::File::create(&path)?;
+        file.write_all(b"performance")?;
+    }
+    Ok(())
+}
 
-    if enabled {
-        println!("{}", "🚀 Running booster cycle...".bold().green());
-        log("Running booster cycle");
-    } else {
-        println!("{}", "⏸ Booster cycle skipped (paused)".yellow());
-        log("Booster cycle skipped (paused)");
+fn restore_performance_boost() -> io::Result<()> {
+    info!("Restoring CPU governor to powersave...");
+    let cores = System::new().cpus().len();
+    for i in 0..cores {
+        let path = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor", i);
+        let mut file = std::fs::File::create(&path)?;
+        file.write_all(b"powersave")?;
+    }
+    Ok(())
+}
+
+fn get_system_metrics() {
+    let mut system = System::new();
+    system.refresh_all();
+    let cpu_load = system.global_cpu_info().cpu_usage() / (system.cpus().len() as f32);
+    let memory_usage_mb = system.used_memory() as f64 / 1024.0 / 1024.0;
+    let swap_usage_mb = system.used_swap() as f64 / 1024.0 / 1024.0;
+    info!(
+        "Metrics: CPU {:.2}%, Mem {:.2}MB, Swap {:.2}MB",
+        cpu_load, memory_usage_mb, swap_usage_mb
+    );
+}
+
+pub fn run_single_shot_boost(config: &Config) {
+    info!("Single-shot boost...");
+    notifier::notify_started(config);
+    if !is_root() {
         return;
     }
 
-    // CPU governor
-    if command_exists("cpufreq-set") {
-        if let Ok(cores) = get_cpu_cores() {
-            let msg = format!("Detected {} CPU cores, setting performance governor", cores);
-            println!("{}", msg);
-            log(&msg);
-            run_sudo("cpufreq-set", &["-r", "-g", "performance"]);
+    get_system_metrics();
+
+    let system = System::new();
+    let cpu_load = system.global_cpu_info().cpu_usage() / (system.cpus().len() as f32);
+
+    if cpu_load < config.idle_load_threshold as f32 {
+        if let Err(e) = apply_performance_boost() {
+            error!("Boost failed: {}", e);
+        } else {
+            notifier::notify_boost_applied(config);
         }
+    } else {
+        notifier::notify_busy(config, "System too busy.");
     }
 
-    // Swappiness
-    if command_exists("sysctl") {
-        run_sudo("sysctl", &["vm.swappiness=10"]);
-        log("Swappiness set to 10");
+    if let Err(e) = restore_performance_boost() {
+        error!("Restore failed: {}", e);
     }
-
-    // Refresh swap if needed
-    if command_exists("swapoff") && command_exists("swapon") {
-        if let Ok(swap_used) = get_swap_usage() {
-            if swap_used > 0 {
-                let msg = format!("Used swap: {} KiB. Refreshing swap...", swap_used);
-                println!("{}", msg);
-                log(&msg);
-                run_sudo("swapoff", &["-a"]);
-                run_sudo("swapon", &["-a"]);
-            }
-        }
-    }
-
-    // Drop page cache
-    if fs::metadata("/proc/sys/vm/drop_caches").is_ok() {
-        println!("{}", "Dropping page cache...".green());
-        log("Dropping page cache");
-        run_sudo("sh", &["-c", "echo 3 > /proc/sys/vm/drop_caches"]);
-    }
-
-    println!("{}", "✅ Booster cycle completed.".bold().green());
-    log("Booster cycle completed");
-    notifier::notify_idle("Booster cycle completed");
+    notifier::notify_stopped(config);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::RefCell;
-    use std::sync::{Arc, Mutex};
-
-    thread_local! {
-        static LOGS: RefCell<Vec<String>> = RefCell::new(vec![]);
-        static NOTIFICATIONS: RefCell<Vec<String>> = RefCell::new(vec![]);
+pub fn run_daemon_boost(config: &Config, is_paused: Arc<AtomicBool>) {
+    info!("Daemon started");
+    notifier::notify_started(config);
+    if !is_root() {
+        return;
     }
 
-    // Mock logging
-    fn mock_log(msg: &str) {
-        LOGS.with(|l| l.borrow_mut().push(msg.to_string()));
-    }
+    let running = Arc::new(AtomicBool::new(true));
 
-    // Mock notifier functions
-    fn mock_notify_idle(msg: &str) {
-        NOTIFICATIONS.with(|n| n.borrow_mut().push(format!("IDLE: {}", msg)));
-    }
-    fn mock_notify_busy(msg: &str) {
-        NOTIFICATIONS.with(|n| n.borrow_mut().push(format!("BUSY: {}", msg)));
-    }
-    fn mock_notify_paused(msg: &str) {
-        NOTIFICATIONS.with(|n| n.borrow_mut().push(format!("PAUSED: {}", msg)));
-    }
+    // Pause/resume handler
+    let is_paused_clone = Arc::clone(&is_paused);
+    thread::spawn(move || {
+        let mut signals = Signals::new(&[SIGUSR1]).unwrap();
+        for _ in signals.forever() {
+            let current_state = is_paused_clone.load(Ordering::Relaxed);
+            is_paused_clone.store(!current_state, Ordering::Relaxed);
+            info!("Paused toggled: {}", !current_state);
+        }
+    });
 
-    // Mock helpers
-    fn mock_command_exists(_: &str) -> bool {
-        true
-    }
-    fn mock_run_sudo(_: &str, _: &[&str]) {}
-    fn mock_get_cpu_cores() -> Result<usize, std::io::Error> {
-        Ok(4)
-    }
-    fn mock_get_swap_usage() -> Result<u64, std::io::Error> {
-        Ok(0)
-    }
+    // Shutdown handler
+    let running_clone = Arc::clone(&running);
+    let config_clone = config.clone();
+    thread::spawn(move || {
+        let mut signals = Signals::new(&[SIGINT, SIGTERM]).unwrap();
+        for _ in signals.forever() {
+            info!("Shutdown signal received");
+            let _ = restore_performance_boost();
+            notifier::notify_stopped(&config_clone);
+            running_clone.store(false, Ordering::Relaxed);
+            break;
+        }
+    });
 
-    fn run_daemon_once(booster_enabled: Arc<Mutex<bool>>, config: Config, load: f64) {
-        // simulate one loop iteration
-        let enabled = *booster_enabled.lock().unwrap();
-
-        if !enabled {
-            mock_log("Booster paused by user");
-            mock_notify_paused("Booster paused by user");
-            return;
+    while running.load(Ordering::Relaxed) {
+        if is_paused.load(Ordering::Relaxed) {
+            notifier::notify_paused(config, "Paused");
+            thread::sleep(Duration::from_secs(config.max_interval));
+            continue;
         }
 
-        if load < config.idle_load_threshold {
-            mock_log("System idle detected, running booster");
-            mock_notify_idle("System idle detected, running booster");
+        get_system_metrics();
+
+        let system = System::new();
+        let cpu_load = system.global_cpu_info().cpu_usage() / (system.cpus().len() as f32);
+
+        if cpu_load < config.idle_load_threshold as f32 {
+            let _ = apply_performance_boost();
+            notifier::notify_boost_applied(config);
         } else {
-            let msg = format!("System busy (load {:.2}), skipping booster", load);
-            mock_log(&msg);
-            mock_notify_busy(&msg);
+            let _ = restore_performance_boost();
+            notifier::notify_boost_restored(config);
         }
+
+        thread::sleep(Duration::from_secs(config.min_interval));
     }
 
-    #[test]
-    fn test_paused_state() {
-        let booster_enabled = Arc::new(Mutex::new(false));
-        let config = Config::default();
-
-        run_daemon_once(Arc::clone(&booster_enabled), config, 0.0);
-
-        LOGS.with(|l| {
-            let logs = l.borrow();
-            assert!(logs.iter().any(|s| s.contains("Booster paused by user")));
-        });
-
-        NOTIFICATIONS.with(|n| {
-            let notifs = n.borrow();
-            assert!(notifs.iter().any(|s| s.contains("PAUSED")));
-        });
-    }
-
-    #[test]
-    fn test_idle_state() {
-        let booster_enabled = Arc::new(Mutex::new(true));
-        let mut config = Config::default();
-        config.idle_load_threshold = 0.5;
-
-        run_daemon_once(Arc::clone(&booster_enabled), config, 0.2);
-
-        LOGS.with(|l| {
-            let logs = l.borrow();
-            assert!(logs.iter().any(|s| s.contains("System idle")));
-        });
-
-        NOTIFICATIONS.with(|n| {
-            let notifs = n.borrow();
-            assert!(notifs.iter().any(|s| s.contains("IDLE")));
-        });
-    }
-
-    #[test]
-    fn test_busy_state() {
-        let booster_enabled = Arc::new(Mutex::new(true));
-        let mut config = Config::default();
-        config.idle_load_threshold = 0.5;
-
-        run_daemon_once(Arc::clone(&booster_enabled), config, 0.8);
-
-        LOGS.with(|l| {
-            let logs = l.borrow();
-            assert!(logs.iter().any(|s| s.contains("System busy")));
-        });
-
-        NOTIFICATIONS.with(|n| {
-            let notifs = n.borrow();
-            assert!(notifs.iter().any(|s| s.contains("BUSY")));
-        });
-    }
+    info!("Daemon stopped");
 }

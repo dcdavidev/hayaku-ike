@@ -2,10 +2,27 @@
 name = "hayaku-ike"
 version = "0.1.0"
 edition = "2024"
+authors = ["Davide Di Criscito <dcdavidev@outlook.com>"]
+description = "Linux speed booster daemon"
+license = "MIT"
+repository = "https://github.com/dcdavidev/hayaku-ike.git"
+homepage = "https://github.com/dcdavidev/hayaku-ike"
 
 [dependencies]
-colored = "2"
-chrono = "0.4"
-tray-item = "0.6"
-notify-rust = "4.6"
-lazy_static = "1.4"
+clap = { version = "4.5.4", features = ["derive"] }
+serde = { version = "1.0.198", features = ["derive"] }
+toml = "0.8.12"
+sysinfo = "0.30.5"
+log = "0.4.21"
+env_logger = "0.11.3"
+notify-rust = "4.8.0"
+nix = { version = "0.28.0", features = ["user", "signal", "process"] }
+signal-hook = "0.3.15"
+
+[[bin]]
+name = "hayaku-ike"
+path = "src/main.rs"
+
+[[bin]]
+name = "install"
+path = "src/bin/install.rs"

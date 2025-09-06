@@ -1,78 +1,49 @@
-mod booster;
-mod config;
-mod helpers;
-mod icons;
-mod installer;
-mod logger;
-mod notifier;
-mod tray; // added for icon constants
+use crate::cli::{Args, Commands};
+use crate::config::Config;
+use clap::Parser;
+use env_logger;
+use log::{error, info, warn};
+use nix::unistd::{self, Pid};
+use std::process;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-use booster::start_daemon_with_config;
-use config::Config;
-use std::sync::{Arc, Mutex};
+mod booster;
+mod cli;
+mod config;
+mod notifier;
 
 fn main() {
-    let booster_enabled = Arc::new(Mutex::new(true));
+    env_logger::init();
+    info!("🚀 Starting Hayaku-Ike...");
 
-    // Load configuration
-    let config = Config::load("config.toml");
+    let args = Args::parse();
+    let config = Config::load("/etc/hayaku-ike.d/config.toml");
 
-    // Start booster daemon
-    let booster_clone = Arc::clone(&booster_enabled);
-    let config_clone = config.clone();
-    std::thread::spawn(move || {
-        start_daemon_with_config(booster_clone, config_clone);
-    });
-
-    // Start tray with dynamic icon updates
-    tray::start_tray(booster_enabled, || helpers::get_load_avg());
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{Arc, Mutex};
-
-    #[test]
-    fn test_config_load() {
-        // Load non-existing config returns default
-        let cfg = Config::load("nonexistent.toml");
-        assert_eq!(cfg.min_interval, 30);
-        assert_eq!(cfg.max_interval, 300);
-        assert_eq!(cfg.idle_load_threshold, 0.2);
-    }
-
-    #[test]
-    fn test_booster_flag() {
-        // Booster enabled should be true initially
-        let booster_enabled = Arc::new(Mutex::new(true));
-        assert_eq!(*booster_enabled.lock().unwrap(), true);
-
-        // We can toggle it to false safely
-        {
-            let mut flag = booster_enabled.lock().unwrap();
-            *flag = false;
+    match args.command {
+        Commands::Daemon => {
+            info!("Running in daemon mode...");
+            let is_paused = Arc::new(AtomicBool::new(false));
+            booster::run_daemon_boost(&config, is_paused);
         }
-        assert_eq!(*booster_enabled.lock().unwrap(), false);
-    }
-
-    #[test]
-    fn test_start_daemon_stub() {
-        // We cannot run the real daemon in tests (it loops forever)
-        // Instead, test that we can call start_daemon_with_config with a dummy config
-        let booster_enabled = Arc::new(Mutex::new(true));
-        let config = Config::default();
-
-        // This will just call one iteration if we refactor daemon to allow a single-run
-        // Here we simply assert that calling the function doesn't panic (mocked)
-        let booster_clone = Arc::clone(&booster_enabled);
-        let config_clone = config.clone();
-
-        std::thread::spawn(move || {
-            // Normally start_daemon_with_config loops forever,
-            // so in a real test we would refactor it to allow single iteration
-            // For now, just call it to ensure it compiles
-            // start_daemon_with_config(booster_clone, config_clone);
-        });
+        Commands::Boost => {
+            info!("Running single-shot boost...");
+            booster::run_single_shot_boost(&config);
+        }
+        Commands::Pause { pid } => {
+            info!("Attempting to pause daemon with PID: {}", pid);
+            if !unistd::Uid::effective().is_root() {
+                warn!("Insufficient privileges to send signal. Please run with sudo.");
+                return;
+            }
+            let nix_pid = Pid::from_raw(pid as i32);
+            match nix::sys::signal::kill(nix_pid, nix::sys::signal::Signal::SIGUSR1) {
+                Ok(_) => info!("✅ Signal sent successfully. Daemon pause toggled."),
+                Err(e) => {
+                    error!("❌ Failed to send signal to PID {}: {}", pid, e);
+                    process::exit(1);
+                }
+            }
+        }
     }
 }
