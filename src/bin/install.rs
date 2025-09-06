@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::{Command, exit};
 
 fn main() {
-    println!("🚀 Hayaku-Ike installation script (simplified)");
+    println!("🚀 Hayaku-Ike installation & launch script");
 
     // Controllo privilegi
     if !Uid::effective().is_root() {
@@ -21,22 +21,18 @@ fn main() {
     }
     println!("✅ Build completed.");
 
-    // Informazioni sul servizio systemd
+    // Path al binario
+    let binary_path = Path::new("target/release/hayaku-ike");
+    if !binary_path.exists() {
+        eprintln!("❌ Compiled binary not found: {}", binary_path.display());
+        exit(1);
+    }
+
+    // Copia del servizio systemd se root
     let service_src = Path::new("assets/service/hayaku-ike.service");
     let service_dst = Path::new("/etc/systemd/system/hayaku-ike.service");
 
-    println!("Service file location: {}", service_src.display());
-    if !Uid::effective().is_root() {
-        println!("⚠️ Run the following manually as root to install the systemd service:");
-        println!(
-            "sudo cp {} {}",
-            service_src.display(),
-            service_dst.display()
-        );
-        println!("sudo systemctl daemon-reload");
-        println!("sudo systemctl enable --now hayaku-ike.service");
-    } else {
-        // Copia e abilita il servizio automaticamente se root
+    if Uid::effective().is_root() {
         if !service_dst.exists() {
             let status = Command::new("cp")
                 .args(&[service_src.to_str().unwrap(), service_dst.to_str().unwrap()])
@@ -59,7 +55,19 @@ fn main() {
             .expect("Failed to enable/start Hayaku-Ike service");
 
         println!("✅ Systemd service installed and started.");
+    } else {
+        println!("⚠️ You are not root. Please run the daemon manually:");
+        println!("{}", binary_path.display());
     }
 
-    println!("🎉 Hayaku-Ike installation complete!");
+    // Lancia il daemon immediatamente
+    println!("🚀 Launching Hayaku-Ike daemon now...");
+    let mut child = Command::new(binary_path)
+        .arg("daemon")
+        .spawn()
+        .expect("Failed to start Hayaku-Ike daemon");
+
+    println!("✅ Daemon started with PID: {}", child.id());
+    println!("Use Ctrl+C to stop the daemon.");
+    let _ = child.wait();
 }
