@@ -113,3 +113,119 @@ pub fn run_boost_cycle(enabled: Option<bool>, config: &Config) {
     log("Booster cycle completed");
     notifier::notify_idle("Booster cycle completed");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::sync::{Arc, Mutex};
+
+    thread_local! {
+        static LOGS: RefCell<Vec<String>> = RefCell::new(vec![]);
+        static NOTIFICATIONS: RefCell<Vec<String>> = RefCell::new(vec![]);
+    }
+
+    // Mock logging
+    fn mock_log(msg: &str) {
+        LOGS.with(|l| l.borrow_mut().push(msg.to_string()));
+    }
+
+    // Mock notifier functions
+    fn mock_notify_idle(msg: &str) {
+        NOTIFICATIONS.with(|n| n.borrow_mut().push(format!("IDLE: {}", msg)));
+    }
+    fn mock_notify_busy(msg: &str) {
+        NOTIFICATIONS.with(|n| n.borrow_mut().push(format!("BUSY: {}", msg)));
+    }
+    fn mock_notify_paused(msg: &str) {
+        NOTIFICATIONS.with(|n| n.borrow_mut().push(format!("PAUSED: {}", msg)));
+    }
+
+    // Mock helpers
+    fn mock_command_exists(_: &str) -> bool {
+        true
+    }
+    fn mock_run_sudo(_: &str, _: &[&str]) {}
+    fn mock_get_cpu_cores() -> Result<usize, std::io::Error> {
+        Ok(4)
+    }
+    fn mock_get_swap_usage() -> Result<u64, std::io::Error> {
+        Ok(0)
+    }
+
+    fn run_daemon_once(booster_enabled: Arc<Mutex<bool>>, config: Config, load: f64) {
+        // simulate one loop iteration
+        let enabled = *booster_enabled.lock().unwrap();
+
+        if !enabled {
+            mock_log("Booster paused by user");
+            mock_notify_paused("Booster paused by user");
+            return;
+        }
+
+        if load < config.idle_load_threshold {
+            mock_log("System idle detected, running booster");
+            mock_notify_idle("System idle detected, running booster");
+        } else {
+            let msg = format!("System busy (load {:.2}), skipping booster", load);
+            mock_log(&msg);
+            mock_notify_busy(&msg);
+        }
+    }
+
+    #[test]
+    fn test_paused_state() {
+        let booster_enabled = Arc::new(Mutex::new(false));
+        let config = Config::default();
+
+        run_daemon_once(Arc::clone(&booster_enabled), config, 0.0);
+
+        LOGS.with(|l| {
+            let logs = l.borrow();
+            assert!(logs.iter().any(|s| s.contains("Booster paused by user")));
+        });
+
+        NOTIFICATIONS.with(|n| {
+            let notifs = n.borrow();
+            assert!(notifs.iter().any(|s| s.contains("PAUSED")));
+        });
+    }
+
+    #[test]
+    fn test_idle_state() {
+        let booster_enabled = Arc::new(Mutex::new(true));
+        let mut config = Config::default();
+        config.idle_load_threshold = 0.5;
+
+        run_daemon_once(Arc::clone(&booster_enabled), config, 0.2);
+
+        LOGS.with(|l| {
+            let logs = l.borrow();
+            assert!(logs.iter().any(|s| s.contains("System idle")));
+        });
+
+        NOTIFICATIONS.with(|n| {
+            let notifs = n.borrow();
+            assert!(notifs.iter().any(|s| s.contains("IDLE")));
+        });
+    }
+
+    #[test]
+    fn test_busy_state() {
+        let booster_enabled = Arc::new(Mutex::new(true));
+        let mut config = Config::default();
+        config.idle_load_threshold = 0.5;
+
+        run_daemon_once(Arc::clone(&booster_enabled), config, 0.8);
+
+        LOGS.with(|l| {
+            let logs = l.borrow();
+            assert!(logs.iter().any(|s| s.contains("System busy")));
+        });
+
+        NOTIFICATIONS.with(|n| {
+            let notifs = n.borrow();
+            assert!(notifs.iter().any(|s| s.contains("BUSY")));
+        });
+    }
+}

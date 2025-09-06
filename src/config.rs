@@ -49,3 +49,48 @@ impl Config {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_values() {
+        let cfg = Config::default();
+        assert_eq!(cfg.idle_load_threshold, 0.2);
+        assert_eq!(cfg.min_interval, 30);
+        assert_eq!(cfg.max_interval, 300);
+        assert_eq!(cfg.load_change_threshold, 0.05);
+        assert_eq!(cfg.min_idle_cycles_for_notify, 2);
+    }
+
+    #[test]
+    fn config_icons_paths() {
+        let cfg = Config::default();
+        assert_eq!(cfg.icons.active, "assets/icons/player-play.svg");
+        assert_eq!(cfg.icons.busy, "assets/icons/cpu.svg");
+        assert_eq!(cfg.icons.paused, "assets/icons/player-stop.svg");
+    }
+
+    #[test]
+    fn load_nonexistent_config_returns_default() {
+        let cfg = Config::load("nonexistent.toml");
+        // It should fallback to defaults
+        assert_eq!(cfg.min_interval, 30);
+        assert_eq!(cfg.max_interval, 300);
+        assert_eq!(cfg.idle_load_threshold, 0.2);
+    }
+
+    #[test]
+    fn load_invalid_toml_returns_default() {
+        // Write an invalid TOML string to a temp file
+        use std::io::Write;
+        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+        write!(tmpfile, "invalid toml content").unwrap();
+
+        let cfg = Config::load(tmpfile.path().to_str().unwrap());
+        assert_eq!(cfg.min_interval, 30);
+        assert_eq!(cfg.max_interval, 300);
+        assert_eq!(cfg.idle_load_threshold, 0.2);
+    }
+}

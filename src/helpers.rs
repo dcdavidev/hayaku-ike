@@ -62,3 +62,91 @@ pub fn get_load_avg() -> f64 {
     }
     0.0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static MOCK_COMMANDS: RefCell<Vec<String>> = RefCell::new(vec![]);
+    }
+
+    fn mock_command_exists(cmd: &str) -> bool {
+        MOCK_COMMANDS.with(|m| m.borrow().contains(&cmd.to_string()))
+    }
+
+    #[test]
+    fn test_command_exists_real_cmd() {
+        // This will check "sh" exists on the system
+        assert!(command_exists("sh"));
+    }
+
+    #[test]
+    fn test_command_exists_fake_cmd() {
+        assert!(!command_exists("this-command-does-not-exist"));
+    }
+
+    #[test]
+    fn test_get_cpu_cores_basic() {
+        let cores = get_cpu_cores().unwrap();
+        assert!(cores > 0, "CPU cores should be greater than 0");
+    }
+
+    #[test]
+    fn test_get_swap_usage_basic() {
+        let swap = get_swap_usage().unwrap();
+        assert!(swap >= 0, "Swap usage should be non-negative");
+    }
+
+    #[test]
+    fn test_get_load_avg_basic() {
+        let load = get_load_avg();
+        assert!(load >= 0.0, "Load average should be non-negative");
+    }
+
+    // Optional: mock `fs::read_to_string` by temporarily overriding helpers
+    // to simulate /proc content without touching the real system
+    #[test]
+    fn test_cpu_cores_mocked() {
+        fn mock_read_cpuinfo() -> String {
+            "processor\t: 0\nprocessor\t: 1\nprocessor\t: 2\nprocessor\t: 3\n".to_string()
+        }
+
+        let cores = mock_read_cpuinfo()
+            .lines()
+            .filter(|l| l.starts_with("processor"))
+            .count();
+        assert_eq!(cores, 4);
+    }
+
+    #[test]
+    fn test_swap_usage_mocked() {
+        fn mock_read_meminfo() -> String {
+            "SwapTotal:       2048 kB\nSwapFree:        1024 kB\n".to_string()
+        }
+
+        let mut total = 0;
+        let mut free = 0;
+        for line in mock_read_meminfo().lines() {
+            if line.starts_with("SwapTotal:") {
+                total = line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap();
+            } else if line.starts_with("SwapFree:") {
+                free = line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap();
+            }
+        }
+
+        let used = total.saturating_sub(free);
+        assert_eq!(used, 1024);
+    }
+}

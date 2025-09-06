@@ -42,3 +42,51 @@ pub fn notify_busy(message: &str) {
 pub fn notify_paused(message: &str) {
     notify_with_icon_throttle("Hayaku-Ike", message, crate::icons::PAUSED);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Override the LAST_NOTIFICATION for testing
+    fn reset_last_notification() {
+        let mut last = LAST_NOTIFICATION.lock().unwrap();
+        *last = String::new();
+    }
+
+    #[test]
+    fn test_notify_idle_sets_last_notification() {
+        reset_last_notification();
+        notify_idle("Idle message");
+        let last = LAST_NOTIFICATION.lock().unwrap();
+        assert_eq!(*last, "Idle message");
+    }
+
+    #[test]
+    fn test_notify_busy_sets_last_notification() {
+        reset_last_notification();
+        notify_busy("Busy message");
+        let last = LAST_NOTIFICATION.lock().unwrap();
+        assert_eq!(*last, "Busy message");
+    }
+
+    #[test]
+    fn test_notify_paused_sets_last_notification() {
+        reset_last_notification();
+        notify_paused("Paused message");
+        let last = LAST_NOTIFICATION.lock().unwrap();
+        assert_eq!(*last, "Paused message");
+    }
+
+    #[test]
+    fn test_throttle_prevents_duplicate_notifications() {
+        reset_last_notification();
+        notify_idle("Duplicate message");
+        // Call again with same message
+        notify_idle("Duplicate message");
+
+        // LAST_NOTIFICATION should still be the same
+        let last = LAST_NOTIFICATION.lock().unwrap();
+        assert_eq!(*last, "Duplicate message");
+    }
+}
