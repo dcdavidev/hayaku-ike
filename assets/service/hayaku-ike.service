@@ -1,10 +1,10 @@
 [Unit]
-Description=Linux Speed Booster Daemon
+Description=Hayaku-Ike Linux Speed Booster Daemon
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/speedup
+ExecStart=/usr/local/bin/hayaku-ike
 Restart=always
 User=root
 

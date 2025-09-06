@@ -26,6 +26,7 @@ pub fn get_swap_usage() -> Result<u64, std::io::Error> {
     let data = fs::read_to_string("/proc/meminfo")?;
     let mut total = 0;
     let mut free = 0;
+
     for line in data.lines() {
         if line.starts_with("SwapTotal:") {
             total = line
@@ -34,8 +35,7 @@ pub fn get_swap_usage() -> Result<u64, std::io::Error> {
                 .unwrap_or("0")
                 .parse::<u64>()
                 .unwrap_or(0);
-        }
-        if line.starts_with("SwapFree:") {
+        } else if line.starts_with("SwapFree:") {
             free = line
                 .split_whitespace()
                 .nth(1)
@@ -44,6 +44,7 @@ pub fn get_swap_usage() -> Result<u64, std::io::Error> {
                 .unwrap_or(0);
         }
     }
+
     Ok(total.saturating_sub(free))
 }
 

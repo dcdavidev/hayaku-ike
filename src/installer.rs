@@ -3,8 +3,8 @@ use std::path::Path;
 use std::process::Command;
 
 pub fn install_service() {
-    let src_path = Path::new("assets/speedup.service");
-    let dst_path = Path::new("/etc/systemd/system/speedup.service");
+    let src_path = Path::new("assets/service/hayaku-ike.service");
+    let dst_path = Path::new("/etc/systemd/system/hayaku-ike.service");
 
     if !src_path.exists() {
         eprintln!("❌ Service template not found at {:?}", src_path);
@@ -21,7 +21,7 @@ pub fn install_service() {
 
     // Enable & start service
     Command::new("systemctl")
-        .args(&["enable", "--now", "speedup.service"])
+        .args(&["enable", "--now", "hayaku-ike.service"])
         .status()
         .expect("Failed to enable/start service");
 

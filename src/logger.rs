@@ -2,7 +2,7 @@ use chrono::Local;
 use std::fs::OpenOptions;
 use std::io::Write;
 
-const LOG_FILE: &str = "/var/log/speedup.log";
+const LOG_FILE: &str = "/var/log/hayaku-ike.log";
 
 /// Log a message to file with timestamp
 pub fn log(message: &str) {

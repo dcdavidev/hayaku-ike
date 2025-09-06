@@ -27,9 +27,9 @@ impl Default for Config {
             load_change_threshold: 0.05,
             min_idle_cycles_for_notify: 2,
             icons: Icons {
-                active: "assets/green.png".to_string(),
-                busy: "assets/orange.png".to_string(),
-                paused: "assets/yellow.png".to_string(),
+                active: "assets/icons/player-play.svg".to_string(),
+                busy: "assets/icons/cpu.svg".to_string(),
+                paused: "assets/icons/player-stop.svg".to_string(),
             },
         }
     }

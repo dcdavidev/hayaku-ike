@@ -1,10 +1,11 @@
 mod booster;
 mod config;
 mod helpers;
+mod icons;
 mod installer;
 mod logger;
 mod notifier;
-mod tray;
+mod tray; // added for icon constants
 
 use booster::start_daemon_with_config;
 use config::Config;
