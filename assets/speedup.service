@@ -1,0 +1,12 @@
+[Unit]
+Description=Linux Speed Booster Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/speedup
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
