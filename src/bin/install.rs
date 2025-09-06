@@ -1,73 +1,58 @@
 use nix::unistd::Uid;
+use std::fs;
 use std::path::Path;
 use std::process::{Command, exit};
 
-fn main() {
-    println!("🚀 Hayaku-Ike installation & launch script");
-
-    // Controllo privilegi
-    if !Uid::effective().is_root() {
-        println!("⚠️ Not running as root. Some steps may require sudo.");
+/// Run a command with optional sudo
+fn run(cmd: &str, args: &[&str], sudo: bool) {
+    let (program, final_args) = if sudo {
+        let mut v = vec![cmd];
+        v.extend(args);
+        ("sudo", v)
+    } else {
+        (cmd, args.to_vec())
+    };
+    println!("Running: {} {:?}", program, &final_args);
+    let status = Command::new(program)
+        .args(&final_args)
+        .status()
+        .expect("Failed to run command");
+    if !status.success() {
+        eprintln!("Command failed: {} {:?}", cmd, args);
+        exit(1);
     }
+}
 
-    // Compila il progetto in release
+fn main() {
+    let sudo = !Uid::effective().is_root();
+
+    // 1️⃣ Build the project in release mode
+    println!("🚀 Building Hayaku-Ike...");
     let status = Command::new("cargo")
         .args(&["build", "--release"])
         .status()
-        .expect("Failed to run cargo build");
+        .expect("Cargo build failed");
     if !status.success() {
-        eprintln!("❌ Cargo build failed!");
-        exit(1);
-    }
-    println!("✅ Build completed.");
-
-    // Path al binario
-    let binary_path = Path::new("target/release/hayaku-ike");
-    if !binary_path.exists() {
-        eprintln!("❌ Compiled binary not found: {}", binary_path.display());
         exit(1);
     }
 
-    // Copia del servizio systemd se root
-    let service_src = Path::new("assets/service/hayaku-ike.service");
-    let service_dst = Path::new("/etc/systemd/system/hayaku-ike.service");
-
-    if Uid::effective().is_root() {
-        if !service_dst.exists() {
-            let status = Command::new("cp")
-                .args(&[service_src.to_str().unwrap(), service_dst.to_str().unwrap()])
-                .status()
-                .expect("Failed to copy service file");
-            if !status.success() {
-                eprintln!("❌ Failed to copy service file.");
-                exit(1);
-            }
-        }
-
-        Command::new("systemctl")
-            .args(&["daemon-reload"])
-            .status()
-            .expect("Failed to reload systemd daemon");
-
-        Command::new("systemctl")
-            .args(&["enable", "--now", "hayaku-ike.service"])
-            .status()
-            .expect("Failed to enable/start Hayaku-Ike service");
-
-        println!("✅ Systemd service installed and started.");
+    // 2️⃣ Copy systemd service file if it doesn't exist
+    let src = Path::new("assets/service/hayaku-ike.service");
+    let dst = Path::new("/etc/systemd/system/hayaku-ike.service");
+    if !dst.exists() {
+        println!("📄 Installing systemd service...");
+        run("cp", &[src.to_str().unwrap(), dst.to_str().unwrap()], sudo);
     } else {
-        println!("⚠️ You are not root. Please run the daemon manually:");
-        println!("{}", binary_path.display());
+        println!("ℹ️ Service already exists. Skipping copy.");
     }
 
-    // Lancia il daemon immediatamente
-    println!("🚀 Launching Hayaku-Ike daemon now...");
-    let mut child = Command::new(binary_path)
-        .arg("daemon")
-        .spawn()
-        .expect("Failed to start Hayaku-Ike daemon");
+    // 3️⃣ Reload systemd and enable/start the service
+    run("systemctl", &["daemon-reload"], sudo);
+    run(
+        "systemctl",
+        &["enable", "--now", "hayaku-ike.service"],
+        sudo,
+    );
 
-    println!("✅ Daemon started with PID: {}", child.id());
-    println!("Use Ctrl+C to stop the daemon.");
-    let _ = child.wait();
+    println!("✅ Hayaku-Ike installed and running!");
 }
