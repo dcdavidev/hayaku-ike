@@ -1,12 +1,28 @@
 mod booster;
+mod config;
+mod helpers;
 mod installer;
+mod logger;
+mod notifier;
+mod tray;
+
+use booster::start_daemon_with_config;
+use config::Config;
+use std::sync::{Arc, Mutex};
 
 fn main() {
-    if std::env::args().any(|a| a == "--install") {
-        installer::install_service();
-        return;
-    }
+    let booster_enabled = Arc::new(Mutex::new(true));
 
-    println!("🚀 Starting Speed Booster Daemon...");
-    booster::start_daemon(60); // fully functional now
+    // Load configuration
+    let config = Config::load("config.toml");
+
+    // Start booster daemon
+    let booster_clone = Arc::clone(&booster_enabled);
+    let config_clone = config.clone();
+    std::thread::spawn(move || {
+        start_daemon_with_config(booster_clone, config_clone);
+    });
+
+    // Start tray with dynamic icon updates
+    tray::start_tray(booster_enabled, || helpers::get_load_avg());
 }
